@@ -1,0 +1,200 @@
+---
+title: "Human Acitivity Recognition"
+author: "Manav Sehgal"
+date: "1/31/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Executive Summary
+
+This data contains data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. Mostly for each sensor it contains the angle, avg, standard deviation, variance, kurtosis, skewness, amplitude, min and max for each of the rotation angles - pitch, roll, yaw. In addition is also contains the gyro, accel and magnetometer reading in each direction.
+
+We tried 3 different models for prediction -** 1) Decision Tree, Random Forest without PCA, 3) Random Forest with PCA.**
+
+Of the three models, we got a **98% accuracy with Random Forest without PCA mode**l on training and 100% accuracy on the validation data - highest among all three and was used for predictions on the test data set.
+
+#Analysis Overview
+
+Devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively.In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to identify if the barbell lifts were done correctly or incorrectly.
+
+Training Data: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+Test Data: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+#Exploratory Data Analysis
+
+In this step we will load the data and do some exploratory analysis to see for relationships between the data and possible predictors.
+
+###Load Data
+
+```{r library}
+library(caret)
+library(stats)
+library(ggplot2)
+set.seed(1)
+```
+
+```{r load data,cache=TRUE, results='hide'}
+
+file_url_training<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+file_url_testing<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+#Dowload the files
+training_file_name<-"pml-training.csv"
+
+testing_file_name<-"pml-testing.csv"
+if(!file.exists(training_file_name)){
+download.file(file_url_training,training_file_name,method="curl")
+}
+if(!file.exists(testing_file_name)){
+download.file(file_url_testing,testing_file_name,method="curl")
+}
+
+#Load the data
+training<-read.csv(training_file_name)
+testing<-read.csv(testing_file_name)
+
+#Check data dimensions and names. Shown in the Appendix
+dim(training)
+dim(testing)
+names(training)
+```
+
+It looks like there are multiple measurements for three rotations (yaw, pitch, roll) taken from each of the sensors from the arm, belt, forearm and the dumbell. 
+
+###Data Pre Processing
+```{r explor1,results='hide'}
+summary(training) #Shown in Appendix
+```
+
+From the summary we can see that all the avg, standard deviation, variance, kurtosis, skewness, amplitude, min and max variables are either blank or have NAs so we can't use those variables. So let's create a subset dataset without these variables.Also, we will combine the two time stamps to create one complete time stamp for the dataset.
+
+Also we can check for near zero variance variables and remove them since they will not add not value to he prediction algorithm.
+
+```{r subset}
+#Remove the empty variables
+index<-grep("avg|stddev|var|kurtosis|skewness|amplitude|min|max",names(training))
+training_sub<-training[,-index]
+testing_sub<-testing[,-index]
+dim(training_sub)
+
+#Create a complete time stamp
+training_sub$full_time_stamp<-as.POSIXct(training_sub$raw_timestamp_part_1+training_sub$raw_timestamp_part_2/1000000,origin = "1970-01-01")
+
+#Check for near zero variance variables.
+nsv<-nearZeroVar(training_sub[,8:59],saveMetrics = TRUE)
+any(nsv$zeroVar,nsv$nzv)
+```
+
+There are no near zero varation variables so we will keep all f them for now. Since the training dataset is big, we can create another data set for cross validation while keeping the test dataset as separate.
+
+```{r partition, results='hide'}
+index_t<-createDataPartition(training_sub$classe,p=0.7,list = FALSE)
+training_sub<-training_sub[index_t,]
+validation_sub<-training_sub[-index_t,]
+dim(training_sub)
+dim(validation_sub)
+```
+
+###Exploratory Analysis
+
+Let's look at the data for any patterns that we can find. For this part we will look at the data for a single participant - Adelmo.
+
+```{r exploranalysis}
+training_sub1<-training_sub[training_sub$user_name=="adelmo",8:60]
+
+custom_plot<-function(x){
+        qplot(y=training_sub1[,x],color=training_sub1$classe,xlab="Index",ylab=names(training_sub1)[x])+labs(color="Classe")        
+}
+
+plots<-lapply(1:52,custom_plot)#Shown in Appendix
+
+```
+
+From the plots it we can see that almost all measurements variables from the belt sensor show a higher variation for the E class and clearly are good predictors. Similary measurements from dumbell do seprate class A and D from the other two classes and so on.
+
+###Pre Processing
+
+The username, new_window etc variables do not add anything to the model so we will remove them in the next step before proceeding with the modelling
+
+```{r preprocessing}
+training_sub_final<-training_sub[,8:60]
+validation_sub_final<-validation_sub[,8:60]
+testing_sub_final<-testing_sub[,8:60]
+```
+
+#Prediction Model
+
+Since this is a non linear classification problem we will try a couple of classification algorithms, namely Tree Classification and Random Forest. 
+
+Also, since the most of measurements from a sensor gives similar clusters for a class we maybe able to compress the data further. Therefore, we will also do Principal Component Analysis and apply the Randon Forest algorithmsm (since it takes a lot of time) with and without pca to see if they give same results.
+
+###Classification tree
+```{r class,message=FALSE,warning=FALSE,cache=TRUE}
+model_class<-train(classe~.,method="rpart",data=training_sub_final)
+print("Classification")
+model_class$results
+
+#Check the accuracy on the validation dataset
+print("Classification accuracy on validation dataset")
+confusionMatrix(validation_sub_final$classe,predict(model_class,validation_sub_final))$overall
+```
+
+The accuracy of the classification tree both in and out of sample is around 50% which is very low. Let's us look at random forest.
+
+###Random Forest
+```{r randomforest,message=FALSE,warning=FALSE,cache=TRUE}
+model_rf<-train(classe~.,method="rf",data=training_sub_final)
+print("Random Forest without PCA")
+model_rf$results
+#Check the accuracy on the validation dataset
+print("Random Forest accuracy on validation dataset")
+confusionMatrix(validation_sub_final$classe,predict(model_rf,validation_sub_final))$overall
+
+ctrl<-trainControl(preProcOptions = list(pcaComp=25))
+model_rf_pca<-train(classe~.,method="rf",data=training_sub_final,preProcess="pca",trControl=ctrl)
+print("Random Forest with PCA")
+model_rf_pca$results
+#Check the accuracy on the validation dataset
+print("Random Forest (with PCA) accuracy on validation dataset")
+confusionMatrix(validation_sub_final$classe,predict(model_rf_pca,validation_sub_final))$overall
+```
+
+Random Forest has an acuracy of  95%. However it takes a lot of time. Also, the accuracy dropped when used with PCA. Therefore, we will use the model without PCA.
+
+###Prediction of Test data
+
+We will now use the Random Forest model (without PCA) to predict the class on the test dataset.
+```{r prediction}
+dim(testing_sub_final)
+pred_test<-predict(model_rf,testing_sub_final)
+print("Random Forest prediction on test dataset")
+pred_test
+```
+
+\newline
+
+#Appendix
+
+```{r appendix1,cache=TRUE}
+#Dimensions and names of the training and test data sets
+dim(training)
+dim(testing)
+names(training)
+
+#Summary of the initial traiing dataset
+summary(training)
+
+#Dimensions of the final subsets for training, validation and test data sets
+dim(training_sub_final)
+dim(validation_sub_final)
+dim(testing_sub_final)
+
+#Plots of the measurements in the training dataset against the class for one participant.
+plots
+```
